@@ -132,7 +132,7 @@ Visit `http://localhost:8000/docs` for the interactive Swagger UI.
 
 3.  **Clone & Setup**:
     ```bash
-    git clone <your-repo-url>
+    git clone (https://github.com/CHAITANYA2605/face-recognition-with-api/)
     cd face_recognition_app
     python3 -m venv venv
     source venv/bin/activate
