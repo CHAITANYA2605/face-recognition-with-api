@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-multipart
+insightface
+onnxruntime
+qdrant-client
+numpy
+opencv-python-headless
+pydantic
+requests
+pytest
+httpx
+pillow-heif
+Pillow
