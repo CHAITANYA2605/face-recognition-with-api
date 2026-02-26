@@ -30,13 +30,19 @@ class VectorDBService:
     def insert_face(self, vector: np.ndarray, metadata: dict = None) -> str:
         self._ensure_collection_exists()
         point_id = str(uuid.uuid4())
+        
+        # Save face_id to metadata for easier access
+        if metadata is None:
+            metadata = {}
+        metadata["face_id"] = point_id
+        
         self.client.upsert(
             collection_name=settings.COLLECTION_NAME,
             points=[
                 models.PointStruct(
                     id=point_id,
                     vector=vector.tolist(),
-                    payload=metadata or {}
+                    payload=metadata
                 )
             ]
         )

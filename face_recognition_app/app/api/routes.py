@@ -1,12 +1,53 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Request, Response
 import resource
+import base64
+import numpy as np
+from app.core.config import settings
 from app.services.face_recognition import face_service
 from app.services.vector_db import vector_db
-from app.schemas.face import FaceRegisterResponse, FaceSearchResponse, FaceMatch, MessageResponse
+from app.schemas.face import FaceRegisterResponse, FaceSearchResponse, FaceMatch, MessageResponse, Base64Request, FaceDetection
 from app.middleware.stats import request_tracker
-import numpy as np
 
 router = APIRouter()
+
+@router.post("/decode-image")
+async def decode_base64_image(request: Base64Request):
+    try:
+        # Remove header if present (e.g., data:image/jpeg;base64,)
+        b64_str = request.base64_string
+        if "," in b64_str:
+            b64_str = b64_str.split(",")[1]
+            
+        image_data = base64.b64decode(b64_str)
+        return Response(content=image_data, media_type="image/jpeg")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64 string: {str(e)}")
+
+@router.get("/face/{face_id}/view")
+async def view_face_image(face_id: str):
+    try:
+        # Qdrant client's retrieve method
+        points = vector_db.client.retrieve(
+            collection_name=settings.COLLECTION_NAME,
+            ids=[face_id],
+            with_payload=True
+        )
+        
+        if not points:
+            raise HTTPException(status_code=404, detail="Face not found")
+            
+        payload = points[0].payload
+        face_b64 = payload.get("face_image")
+        
+        if not face_b64:
+            raise HTTPException(status_code=404, detail="No image stored for this face")
+            
+        image_data = base64.b64decode(face_b64)
+        return Response(content=image_data, media_type="image/jpeg")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/register", response_model=FaceRegisterResponse)
 async def register_face(
@@ -56,23 +97,31 @@ async def recognize_face(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="File must be an image")
     
     content = await file.read()
-    embedding, _ = face_service.analyze_face(content)
+    detections = face_service.analyze_all_faces(content)
     
-    if embedding is None:
+    if not detections:
         raise HTTPException(status_code=400, detail="No face detected in the image")
     
-    results = vector_db.search_face(embedding)
-    
-    matches = []
-    for result in results:
-        matches.append(FaceMatch(
-            id=result.id,
-            score=result.score,
-            metadata=result.payload,
-            face_image=result.payload.get("face_image") if result.payload else None
+    all_results = []
+    for embedding, face_b64 in detections:
+        # Search for each face
+        results = vector_db.search_face(embedding)
+        
+        matches = []
+        for result in results:
+            matches.append(FaceMatch(
+                id=result.id,
+                score=result.score,
+                metadata=result.payload,
+                face_image=result.payload.get("face_image") if result.payload else None
+            ))
+        
+        all_results.append(FaceDetection(
+            query_face_image=face_b64,
+            results=matches
         ))
         
-    return FaceSearchResponse(matches=matches)
+    return FaceSearchResponse(detections=all_results)
 
 @router.delete("/face", response_model=MessageResponse)
 async def delete_face(name: str, phone_number: str):

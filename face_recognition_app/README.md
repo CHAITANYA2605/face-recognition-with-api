@@ -52,9 +52,6 @@ uvicorn main:app --reload
 ```
 The API will be available at `http://localhost:8000`.
 
-### 4. Usage (API Documentation)
-
-Visit `http://localhost:8000/docs` for the interactive Swagger UI.
 
 #### Register a New Face
 - **Endpoint**: `POST /api/v1/register`
