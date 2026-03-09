@@ -20,8 +20,15 @@ class FaceMatch(BaseModel):
 
 
 
+class FaceDetection(BaseModel):
+    query_face_image: str # Base64 encoded crop of the detected face in the query image
+    results: List[FaceMatch] # Matching results for this specific face
+
 class FaceSearchResponse(BaseModel):
-    matches: List[FaceMatch]
+    detections: List[FaceDetection]
 
 class MessageResponse(BaseModel):
     message: str
+
+class Base64Request(BaseModel):
+    base64_string: str

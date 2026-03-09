@@ -42,6 +42,16 @@ class FaceRecognitionService:
             return None
 
     def analyze_face(self, image_bytes: bytes):
+        """Analyze the largest face in the image (Legacy/Simple)."""
+        faces = self.analyze_all_faces(image_bytes)
+        if not faces:
+            return None, None
+        
+        # Sort by size and return the largest (it's already sorted in analyze_all_faces)
+        return faces[0]
+
+    def analyze_all_faces(self, image_bytes: bytes):
+        """Analyze all faces detected in the image."""
         self._load_model()
         
         img = self._decode_image(image_bytes)
@@ -53,22 +63,25 @@ class FaceRecognitionService:
         faces = self.app.get(img)
         
         if not faces:
-            return None, None
+            return []
             
-        # Sort by size to get the largest face
+        # Sort by size to get larger faces first
         faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0]) * (x.bbox[3]-x.bbox[1]), reverse=True)
-        face = faces[0]
         
-        # Crop the face (with some padding if needed, but bbox is usually tight)
-        bbox = face.bbox.astype(int)
-        # Ensure bounds
-        x1, y1, x2, y2 = max(0, bbox[0]), max(0, bbox[1]), min(img.shape[1], bbox[2]), min(img.shape[0], bbox[3])
-        face_crop = img[y1:y2, x1:x2]
+        results = []
+        for face in faces:
+            # Crop the face
+            bbox = face.bbox.astype(int)
+            # Ensure bounds
+            x1, y1, x2, y2 = max(0, bbox[0]), max(0, bbox[1]), min(img.shape[1], bbox[2]), min(img.shape[0], bbox[3])
+            face_crop = img[y1:y2, x1:x2]
+            
+            # Encode face crop to base64
+            _, buffer = cv2.imencode('.jpg', face_crop)
+            face_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+            results.append((face.normed_embedding, face_base64))
         
-        # Encode face crop to base64
-        _, buffer = cv2.imencode('.jpg', face_crop)
-        face_base64 = base64.b64encode(buffer).decode('utf-8')
-        
-        return face.normed_embedding, face_base64
+        return results
 
 face_service = FaceRecognitionService()
