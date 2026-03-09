@@ -81,10 +81,10 @@ async def register_face(
     
     metadata = {
         "name": name,
-        "age": age,
-        "phone_number": phone_number,
-        "filename": file.filename,
-        "face_image": face_b64
+        # "age": age,
+        # "phone_number": phone_number,
+        # "filename": file.filename,
+        # "face_image": face_b64
     }
     
     face_id = vector_db.insert_face(embedding, metadata=metadata)
