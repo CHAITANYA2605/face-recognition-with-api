@@ -9,9 +9,9 @@ class Settings:
     # buffalo_l includes SCRFD-10G for detection and ArcFace-R100 for recognition
     
     # Vector DB Settings
-    QDRANT_HOST: str = "localhost"
-    QDRANT_PORT: int = 6333
-    COLLECTION_NAME: str = "faces"
+    QDRANT_HOST: str = os.environ.get("QDRANT_HOST", "localhost")
+    QDRANT_PORT: int = int(os.environ.get("QDRANT_PORT", "6333"))
+    COLLECTION_NAME: str = "faces-2.0"
     VECTOR_SIZE: int = 512
 
 settings = Settings()

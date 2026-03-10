@@ -78,7 +78,7 @@ async def register_face(
         ("right_profile", right_image),
     ]
 
-    face_ids = {}
+    embeddings = {}
     face_images_b64 = {}
 
     for view, upload in views:
@@ -91,18 +91,18 @@ async def register_face(
         if embedding is None:
             raise HTTPException(status_code=400, detail=f"No face detected in the {view} image")
 
-        metadata = {
-            "name": name,
-            "phone_number": phone_number,
-            "view": view,
-        }
-
-        face_id = vector_db.insert_face(embedding, metadata=metadata)
-        face_ids[view] = face_id
+        embeddings[view] = embedding
         face_images_b64[view] = face_b64
 
+    face_id = vector_db.register_user(
+        front_vec=embeddings["front"],
+        left_vec=embeddings["left_profile"],
+        right_vec=embeddings["right_profile"],
+        metadata={"name": name, "phone_number": phone_number}
+    )
+
     return FaceRegisterResponse(
-        id=face_ids["front"],
+        id=face_id,
         message="Face registered successfully with front and 2 side profile images",
         face_images=face_images_b64
     )
@@ -120,35 +120,17 @@ async def recognize_face(file: UploadFile = File(...)):
     
     all_results = []
     for embedding, face_b64 in detections:
-        # Search across all stored view vectors (3 per person), fetch enough to cover multiple people
-        results = vector_db.search_face(embedding, limit=15)
+        results = vector_db.search_face(embedding, limit=5)
 
-        # Group by person (name + phone_number) and aggregate scores
-        groups: dict = {}
-        for r in results:
-            name = r.payload.get("name", "") if r.payload else ""
-            phone = r.payload.get("phone_number", "") if r.payload else ""
-            key = (name, phone)
-            if key not in groups:
-                groups[key] = {"scores": [], "payload": r.payload}
-            groups[key]["scores"].append(r.score)
-
-        # Sort persons by their average similarity score descending
-        ranked = sorted(
-            groups.items(),
-            key=lambda x: sum(x[1]["scores"]) / len(x[1]["scores"]),
-            reverse=True
-        )
-
-        matches = []
-        for (_, _), data in ranked:
-            avg_score = sum(data["scores"]) / len(data["scores"])
-            matches.append(FaceMatch(
-                id=data["payload"].get("face_id", ""),
-                score=round(avg_score, 4),
-                metadata=data["payload"],
+        matches = [
+            FaceMatch(
+                id=r["payload"].get("face_id", ""),
+                score=round(r["score"], 4),
+                metadata=r["payload"],
                 face_image=None
-            ))
+            )
+            for r in results
+        ]
 
         all_results.append(FaceDetection(
             query_face_image=face_b64,
@@ -168,10 +150,10 @@ async def delete_face(name: str, phone_number: str):
 @router.get("/admin/stats")
 async def get_system_stats(request: Request):
     # Memory Usage
+    import platform
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # On Mac, ru_maxrss is in bytes, on Linux it's often KB.
-    # Assuming bytes for Mac.
-    memory_mb = usage / (1024 * 1024) 
+    # On Mac, ru_maxrss is in bytes; on Linux it's in KB
+    memory_mb = usage / (1024 * 1024) if platform.system() == "Darwin" else usage / 1024
     
     # DB Stats
     db_count = 0
