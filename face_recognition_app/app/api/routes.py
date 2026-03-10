@@ -119,7 +119,7 @@ async def recognize_face(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="No face detected in the image")
     
     all_results = []
-    for embedding, face_b64 in detections:
+    for embedding, _ in detections:
         results = vector_db.search_face(embedding, limit=5)
 
         matches = [
@@ -132,10 +132,7 @@ async def recognize_face(file: UploadFile = File(...)):
             for r in results
         ]
 
-        all_results.append(FaceDetection(
-            query_face_image=face_b64,
-            results=matches
-        ))
+        all_results.append(FaceDetection(results=matches))
 
     return FaceSearchResponse(detections=all_results)
 
