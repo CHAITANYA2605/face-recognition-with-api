@@ -4,7 +4,7 @@ from typing import List, Optional
 class FaceRegisterResponse(BaseModel):
     id: str
     message: str
-    face_image: Optional[str] = None # Base64 encoded crop
+    face_images: Optional[dict] = None  # {"front": b64, "left_profile": b64, "right_profile": b64}
 
 class FaceMetadata(BaseModel):
     name: str

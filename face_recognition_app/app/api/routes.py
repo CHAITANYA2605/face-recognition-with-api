@@ -51,7 +51,9 @@ async def view_face_image(face_id: str):
 
 @router.post("/register", response_model=FaceRegisterResponse)
 async def register_face(
-    file: UploadFile = File(...),
+    front_image: UploadFile = File(...),
+    left_image: UploadFile = File(...),
+    right_image: UploadFile = File(...),
     name: str = Form(...),
     age: int = Form(...),
     phone_number: str = Form(...)
@@ -59,37 +61,51 @@ async def register_face(
     # Input Validation
     if not name.strip() or len(name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Name must be at least 2 characters long")
-    
+
     if not phone_number.isdigit() or not (10 == len(phone_number)):
         raise HTTPException(status_code=400, detail="Phone number must be between 10 digits")
 
     # Check for duplicate registration
     if vector_db.is_user_registered(name, phone_number):
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"User with name '{name}' and phone number '{phone_number}' is already registered."
         )
 
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    
-    content = await file.read()
-    embedding, face_b64 = face_service.analyze_face(content)
-    
-    if embedding is None:
-        raise HTTPException(status_code=400, detail="No face detected in the image")
-    
-    metadata = {
-        "name": name,
-        # "age": age,
-        # "phone_number": phone_number,
-        # "filename": file.filename,
-        # "face_image": face_b64
-    }
-    
-    face_id = vector_db.insert_face(embedding, metadata=metadata)
-    
-    return FaceRegisterResponse(id=face_id, message="Face registered successfully", face_image=face_b64)
+    views = [
+        ("front", front_image),
+        ("left_profile", left_image),
+        ("right_profile", right_image),
+    ]
+
+    face_ids = {}
+    face_images_b64 = {}
+
+    for view, upload in views:
+        if not upload.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail=f"{view} image must be an image file")
+
+        content = await upload.read()
+        embedding, face_b64 = face_service.analyze_face(content)
+
+        if embedding is None:
+            raise HTTPException(status_code=400, detail=f"No face detected in the {view} image")
+
+        metadata = {
+            "name": name,
+            "phone_number": phone_number,
+            "view": view,
+        }
+
+        face_id = vector_db.insert_face(embedding, metadata=metadata)
+        face_ids[view] = face_id
+        face_images_b64[view] = face_b64
+
+    return FaceRegisterResponse(
+        id=face_ids["front"],
+        message="Face registered successfully with front and 2 side profile images",
+        face_images=face_images_b64
+    )
 
 @router.post("/recognize", response_model=FaceSearchResponse)
 async def recognize_face(file: UploadFile = File(...)):
@@ -104,23 +120,41 @@ async def recognize_face(file: UploadFile = File(...)):
     
     all_results = []
     for embedding, face_b64 in detections:
-        # Search for each face
-        results = vector_db.search_face(embedding)
-        
+        # Search across all stored view vectors (3 per person), fetch enough to cover multiple people
+        results = vector_db.search_face(embedding, limit=15)
+
+        # Group by person (name + phone_number) and aggregate scores
+        groups: dict = {}
+        for r in results:
+            name = r.payload.get("name", "") if r.payload else ""
+            phone = r.payload.get("phone_number", "") if r.payload else ""
+            key = (name, phone)
+            if key not in groups:
+                groups[key] = {"scores": [], "payload": r.payload}
+            groups[key]["scores"].append(r.score)
+
+        # Sort persons by their average similarity score descending
+        ranked = sorted(
+            groups.items(),
+            key=lambda x: sum(x[1]["scores"]) / len(x[1]["scores"]),
+            reverse=True
+        )
+
         matches = []
-        for result in results:
+        for (_, _), data in ranked:
+            avg_score = sum(data["scores"]) / len(data["scores"])
             matches.append(FaceMatch(
-                id=result.id,
-                score=result.score,
-                metadata=result.payload,
-                face_image=result.payload.get("face_image") if result.payload else None
+                id=data["payload"].get("face_id", ""),
+                score=round(avg_score, 4),
+                metadata=data["payload"],
+                face_image=None
             ))
-        
+
         all_results.append(FaceDetection(
             query_face_image=face_b64,
             results=matches
         ))
-        
+
     return FaceSearchResponse(detections=all_results)
 
 @router.delete("/face", response_model=MessageResponse)
