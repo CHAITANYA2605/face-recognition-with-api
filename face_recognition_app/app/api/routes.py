@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Re
 import resource
 import base64
 import numpy as np
+import requests
 from app.core.config import settings
 from app.services.face_recognition import face_service
 from app.services.vector_db import vector_db
@@ -9,6 +10,31 @@ from app.schemas.face import FaceRegisterResponse, FaceSearchResponse, FaceMatch
 from app.middleware.stats import request_tracker
 
 router = APIRouter()
+
+
+def _match_quality(score: float, quality: dict) -> str:
+    occlusion_score = float((quality or {}).get("occlusion_score", 0.0))
+    if score >= 0.72 and occlusion_score < 0.45:
+        return "high"
+    if score >= 0.55:
+        return "medium"
+    return "low"
+
+
+def _register_face_with_user_api(name: str, face_id: str, token: str) -> requests.Response:
+    return requests.post(
+        settings.USER_LIST_API_URL,
+        headers={
+            "Content-Type": "application/json",
+            "token": token,
+        },
+        json={
+            "userLabel": name,
+            "key": face_id,
+            "type": "FACE_RECOGNITION",
+        },
+        timeout=settings.USER_LIST_API_TIMEOUT_SECONDS,
+    )
 
 @router.post("/decode-image")
 async def decode_base64_image(request: Base64Request):
@@ -51,25 +77,22 @@ async def view_face_image(face_id: str):
 
 @router.post("/register", response_model=FaceRegisterResponse)
 async def register_face(
+    request: Request,
     front_image: UploadFile = File(...),
     left_image: UploadFile = File(...),
     right_image: UploadFile = File(...),
     name: str = Form(...),
-    age: int = Form(...),
-    phone_number: str = Form(...)
+    age: int = Form(...)
 ):
     # Input Validation
     if not name.strip() or len(name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Name must be at least 2 characters long")
 
-    if not phone_number.isdigit() or not (10 == len(phone_number)):
-        raise HTTPException(status_code=400, detail="Phone number must be between 10 digits")
-
     # Check for duplicate registration
-    if vector_db.is_user_registered(name, phone_number):
+    if vector_db.is_user_registered(name):
         raise HTTPException(
             status_code=400,
-            detail=f"User with name '{name}' and phone number '{phone_number}' is already registered."
+            detail=f"User with name '{name}' is already registered."
         )
 
     views = [
@@ -79,27 +102,68 @@ async def register_face(
     ]
 
     embeddings = {}
+    region_vectors = {}
+    occlusion_vectors = {}
     face_images_b64 = {}
+    profile_quality = {}
+    profile_visible_regions = {}
+    profile_occlusion_model_used = {}
 
     for view, upload in views:
         if not upload.content_type.startswith("image/"):
             raise HTTPException(status_code=400, detail=f"{view} image must be an image file")
 
         content = await upload.read()
-        embedding, face_b64 = face_service.analyze_face(content)
+        analysis = face_service.analyze_primary_face_details(content)
 
-        if embedding is None:
+        if analysis is None:
             raise HTTPException(status_code=400, detail=f"No face detected in the {view} image")
 
-        embeddings[view] = embedding
-        face_images_b64[view] = face_b64
+        embeddings[view] = analysis.embedding
+        region_vectors[view] = analysis.regions
+        occlusion_vectors[view] = analysis.occlusion_embedding if analysis.occlusion_model_used else None
+        face_images_b64[view] = analysis.face_image
+        profile_quality[view] = analysis.quality
+        profile_visible_regions[view] = analysis.visible_regions
+        profile_occlusion_model_used[view] = analysis.occlusion_model_used
 
     face_id = vector_db.register_user(
         front_vec=embeddings["front"],
         left_vec=embeddings["left_profile"],
         right_vec=embeddings["right_profile"],
-        metadata={"name": name, "phone_number": phone_number}
+        region_vectors=region_vectors,
+        occlusion_vectors=occlusion_vectors,
+        metadata={
+            "name": name,
+            "age": age,
+            "profile_quality": profile_quality,
+            "profile_visible_regions": profile_visible_regions,
+            "profile_occlusion_model_used": profile_occlusion_model_used,
+            "face_images_stored": settings.STORE_FACE_IMAGES_IN_DB,
+            "occlusion_model_used": any(profile_occlusion_model_used.values())
+        }
+        | ({
+            "face_image": face_images_b64["front"],
+        } if settings.STORE_FACE_IMAGES_IN_DB else {})
     )
+
+    try:
+        user_api_response = _register_face_with_user_api(
+            name=name,
+            face_id=face_id,
+            token=request.headers.get("token", "")
+        )
+    except requests.RequestException as exc:
+        vector_db.delete_face_by_id(face_id)
+        raise HTTPException(status_code=502, detail=f"User list API request failed: {str(exc)}")
+
+    if not user_api_response.ok:
+        vector_db.delete_face_by_id(face_id)
+        return Response(
+            content=user_api_response.content,
+            status_code=user_api_response.status_code,
+            media_type=user_api_response.headers.get("content-type", "application/json")
+        )
 
     return FaceRegisterResponse(
         id=face_id,
@@ -116,32 +180,63 @@ async def recognize_face(file: UploadFile = File(...)):
     detections = face_service.analyze_all_faces(content)
     
     if not detections:
-        raise HTTPException(status_code=400, detail="No face detected in the image")
+        return FaceSearchResponse(
+            detections=[],
+            message="No usable face detected. The image may be too occluded, blurred, dark, or angled for recognition."
+        )
     
     all_results = []
-    for embedding, _ in detections:
-        results = vector_db.search_face(embedding, limit=5)
+    for detection in detections:
+        results = vector_db.staged_search_face(
+            detection.embedding,
+            region_vectors=detection.regions,
+            visible_regions=detection.visible_regions,
+            occlusion_vector=detection.occlusion_embedding,
+            occlusion_model_used=detection.occlusion_model_used,
+            quality=detection.quality,
+            limit=5
+        )
 
         matches = [
             FaceMatch(
                 id=r["payload"].get("face_id", ""),
                 score=round(r["score"], 4),
                 metadata=r["payload"],
-                face_image=None
+                face_image=r["payload"].get("face_image"),
+                match_quality=_match_quality(r["score"], detection.quality),
+                score_breakdown=r.get("score_breakdown", [])[:8],
+                recognition_stages=r.get("recognition_stages", []),
+                confidence_reason=r.get("confidence_reason"),
+                fused_score=round(r["fused_score"], 4) if "fused_score" in r else None,
+                stage_scores=r.get("stage_scores")
             )
             for r in results
         ]
 
-        all_results.append(FaceDetection(results=matches))
+        message = None
+        if detection.quality.get("occlusion_score", 0) >= 0.45:
+            message = "Partial or low-visibility face detected; results are best-effort."
+        elif results:
+            message = results[0].get("confidence_reason")
+
+        all_results.append(FaceDetection(
+            results=matches,
+            query_face_image=detection.face_image,
+            visible_regions=detection.visible_regions,
+            quality=detection.quality,
+            fallback_used=detection.fallback_used,
+            occlusion_model_used=detection.occlusion_model_used,
+            message=message
+        ))
 
     return FaceSearchResponse(detections=all_results)
 
 @router.delete("/face", response_model=MessageResponse)
-async def delete_face(name: str, phone_number: str):
-    if not vector_db.is_user_registered(name, phone_number):
-         raise HTTPException(status_code=404, detail=f"User with name '{name}' and phone number '{phone_number}' not found")
+async def delete_face(name: str):
+    if not vector_db.is_user_registered(name):
+         raise HTTPException(status_code=404, detail=f"User with name '{name}' not found")
 
-    vector_db.delete_face_by_metadata(name, phone_number)
+    vector_db.delete_face_by_metadata(name)
     return MessageResponse(message=f"Face(s) for user '{name}' deleted successfully")
 
 @router.get("/admin/stats")

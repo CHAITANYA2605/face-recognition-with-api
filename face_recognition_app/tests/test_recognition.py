@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from app.services.face_recognition import FaceRecognitionService
 
@@ -41,3 +42,33 @@ def test_decode_image_heic_fallback():
                  assert result is not None
                  # Verify usage of PIL
                  mock_open.assert_called_once()
+
+
+def test_aligned_face_crop_uses_landmarks():
+    service = FaceRecognitionService()
+    image = np.zeros((240, 240, 3), dtype=np.uint8)
+    face = SimpleNamespace(
+        bbox=np.array([40, 40, 200, 220]),
+        kps=np.array([
+            [80, 100],
+            [160, 100],
+            [120, 140],
+            [90, 175],
+            [150, 175],
+        ], dtype=np.float32),
+    )
+
+    crop = service._aligned_face_crop(image, face)
+
+    assert crop.shape == (192, 160, 3)
+
+
+def test_aligned_face_crop_falls_back_without_landmarks():
+    service = FaceRecognitionService()
+    image = np.zeros((240, 240, 3), dtype=np.uint8)
+    face = SimpleNamespace(bbox=np.array([40, 40, 200, 220]), kps=None)
+
+    crop = service._aligned_face_crop(image, face)
+
+    assert crop.shape[0] > 0
+    assert crop.shape[1] > 0
