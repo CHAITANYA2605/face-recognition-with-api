@@ -7,7 +7,7 @@ This project is a high-performance face recognition system that uses **InsightFa
 - **State-of-the-Art Accuracy**: Uses ArcFace methodology for robust face recognition.
 - **Scalable Vector Search**: Leverages Qdrant for fast retrieval of millions of faces.
 - **REST API**: Built with FastAPI for easy integration.
-- **Rich Metadata**: Stores Name, Age, and Phone Number with every face.
+- **Rich Metadata**: Stores name and age with every face.
 
 ## Prerequisites
 
@@ -62,13 +62,12 @@ Visit `http://localhost:8000/docs` for the interactive Swagger UI.
     - `file`: Image file containing a face.
     - `name`: Name of the person.
     - `age`: Age of the person.
-    - `phone_number`: Phone number.
 
 #### Recognize a Face
 - **Endpoint**: `POST /api/v1/recognize`
 - **Parameters**:
     - `file`: Image file to recognize.
-- **Response**: Returns matching faces with similarity scores and metadata (Name, Age, Phone).
+- **Response**: Returns matching faces with similarity scores and metadata (name and age).
 
 ## Server Deployment Guide
 

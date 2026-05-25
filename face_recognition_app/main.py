@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.routes import router
@@ -21,6 +23,23 @@ app.add_middleware(
 app.add_middleware(StatsMiddleware)
 
 app.include_router(router, prefix=settings.API_V1_STR)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    if request.url.path == f"{settings.API_V1_STR}/register":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": (
+                    "Invalid registration request."
+                )
+            },
+        )
+
+    return JSONResponse(
+        status_code=400,
+        content={"detail": "Invalid request. Please check the submitted data."},
+    )
 
 @app.get("/health")
 def health_check():

@@ -9,22 +9,34 @@ class FaceRegisterResponse(BaseModel):
 class FaceMetadata(BaseModel):
     name: str
     age: int
-    phone_number: str
     filename: Optional[str] = None
 
 class FaceMatch(BaseModel):
     id: str
     score: float
     metadata: Optional[dict] = None # Will contain FaceMetadata fields
-    face_image: Optional[str] = None # Base64 encoded crop from DB (if stored) or query crop
+    # face_image: Optional[str] = None # Base64 encoded crop from DB (if stored) or query crop
+    match_quality: Optional[str] = None
+    score_breakdown: Optional[List[dict]] = None
+    recognition_stages: Optional[List[str]] = None
+    confidence_reason: Optional[str] = None
+    fused_score: Optional[float] = None
+    stage_scores: Optional[dict] = None
 
 
 
 class FaceDetection(BaseModel):
     results: List[FaceMatch] # Matching results for this specific face
+    # query_face_image: Optional[str] = None
+    # visible_regions: Optional[List[str]] = None
+    # quality: Optional[dict] = None
+    # fallback_used: Optional[str] = None
+    # occlusion_model_used: Optional[bool] = None
+    # message: Optional[str] = None
 
 class FaceSearchResponse(BaseModel):
     detections: List[FaceDetection]
+    message: Optional[str] = None
 
 class MessageResponse(BaseModel):
     message: str
