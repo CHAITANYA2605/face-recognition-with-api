@@ -1,3 +1,15 @@
+import newrelic.agent
+import os as _os
+newrelic.agent.initialize(_os.path.join(_os.path.dirname(__file__), "newrelic.ini"))
+
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -26,6 +38,7 @@ app.include_router(router, prefix=settings.API_V1_STR)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning("Validation error on %s: %s", request.url.path, exc.errors())
     if request.url.path == f"{settings.API_V1_STR}/register":
         return JSONResponse(
             status_code=400,
@@ -44,6 +57,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+app = newrelic.agent.ASGIApplicationWrapper(app)
 
 if __name__ == "__main__":
     import uvicorn

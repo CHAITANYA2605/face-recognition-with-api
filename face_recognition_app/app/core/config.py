@@ -20,6 +20,11 @@ class Settings:
     VECTOR_SIZE: int = 512
     REGION_VECTOR_SIZE: int = 128
 
+    # New Relic APM
+    NEW_RELIC_LICENSE_KEY: str = os.environ.get("NEW_RELIC_LICENSE_KEY", "")
+    NEW_RELIC_APP_NAME: str = os.environ.get("NEW_RELIC_APP_NAME", "face-recognition-app")
+    NEW_RELIC_USER_KEY: str = os.environ.get("NEW_RELIC_USER_KEY", "")
+
     # Kapisa user mapping API
     USER_LIST_API_URL: str = os.environ.get("USER_LIST_API_URL", "https://backend.kapisa.co.in/v1/user/list")
     USER_LIST_API_TIMEOUT_SECONDS: float = float(os.environ.get("USER_LIST_API_TIMEOUT_SECONDS", "100"))

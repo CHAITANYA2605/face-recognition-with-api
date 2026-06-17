@@ -1,5 +1,9 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Request, Response
+import newrelic.agent
+import logging
 import resource
+
+logger = logging.getLogger(__name__)
 import base64
 import numpy as np
 import requests
@@ -84,12 +88,15 @@ async def register_face(
     name: str = Form(...),
     age: int = Form(...)
 ):
+    logger.info("Register face request for name=%s", name)
     # Input Validation
     if not name.strip() or len(name.strip()) < 2:
+        logger.warning("Registration rejected: name too short name=%s", name)
         raise HTTPException(status_code=400, detail="Name must be at least 2 characters long")
 
     # Check for duplicate registration
     if vector_db.is_user_registered(name):
+        logger.warning("Registration rejected: duplicate name=%s", name)
         raise HTTPException(
             status_code=400,
             detail=f"User with name '{name}' is already registered."
@@ -117,6 +124,7 @@ async def register_face(
         analysis = face_service.analyze_primary_face_details(content)
 
         if analysis is None:
+            logger.warning("No face detected in %s image for name=%s", view, name)
             raise HTTPException(status_code=400, detail=f"No face detected in the {view} image")
 
         embeddings[view] = analysis.embedding
@@ -155,16 +163,37 @@ async def register_face(
         )
     except requests.RequestException as exc:
         vector_db.delete_face_by_id(face_id)
+        logger.error("User API request failed for name=%s face_id=%s error=%s", name, face_id, exc)
+        newrelic.agent.record_custom_event("FaceRegistration", {
+            "status": "failure",
+            "name": name,
+            "reason": "user_api_request_error",
+        })
         raise HTTPException(status_code=502, detail=f"User list API request failed: {str(exc)}")
 
     if not user_api_response.ok:
         vector_db.delete_face_by_id(face_id)
+        logger.error("User API returned error status=%s for name=%s face_id=%s", user_api_response.status_code, name, face_id)
+        newrelic.agent.record_custom_event("FaceRegistration", {
+            "status": "failure",
+            "name": name,
+            "reason": f"user_api_http_{user_api_response.status_code}",
+        })
         return Response(
             content=user_api_response.content,
             status_code=user_api_response.status_code,
             media_type=user_api_response.headers.get("content-type", "application/json")
         )
 
+    logger.info("Face registered successfully name=%s face_id=%s age=%s", name, face_id, age)
+    newrelic.agent.record_custom_event("FaceRegistration", {
+        "status": "success",
+        "name": name,
+        "age": age,
+        "face_id": face_id,
+        "occlusion_model_used": any(profile_occlusion_model_used.values()),
+        "views_processed": len(views),
+    })
     return FaceRegisterResponse(
         id=face_id,
         message="Face registered successfully with front and 2 side profile images",
@@ -173,13 +202,16 @@ async def register_face(
 
 @router.post("/recognize", response_model=FaceSearchResponse)
 async def recognize_face(file: UploadFile = File(...)):
+    logger.info("Recognize face request filename=%s content_type=%s", file.filename, file.content_type)
     if not file.content_type.startswith("image/"):
+        logger.warning("Recognize rejected: not an image content_type=%s", file.content_type)
         raise HTTPException(status_code=400, detail="File must be an image")
-    
+
     content = await file.read()
     detections = face_service.analyze_all_faces(content)
-    
+
     if not detections:
+        logger.info("No faces detected in uploaded image")
         return FaceSearchResponse(
             detections=[],
             message="No usable face detected. The image may be too occluded, blurred, dark, or angled for recognition."
@@ -229,14 +261,35 @@ async def recognize_face(file: UploadFile = File(...)):
             message=message
         ))
 
+    for i, (detection, result_set) in enumerate(zip(detections, all_results)):
+        top_score = result_set.results[0].score if result_set.results else 0.0
+        top_id = result_set.results[0].id if result_set.results else None
+        logger.info(
+            "Recognition result face_index=%s matched=%s top_score=%.4f top_id=%s",
+            i, bool(result_set.results), top_score, top_id,
+        )
+        newrelic.agent.record_custom_event("FaceRecognition", {
+            "face_index": i,
+            "matched": len(result_set.results) > 0,
+            "top_score": round(top_score, 4),
+            "match_quality": result_set.results[0].match_quality if result_set.results else "none",
+            "occlusion_model_used": detection.occlusion_model_used,
+            "fallback_used": detection.fallback_used,
+            "occlusion_score": round(float((detection.quality or {}).get("occlusion_score", 0.0)), 3),
+            "visible_region_count": len(detection.visible_regions or []),
+        })
+
     return FaceSearchResponse(detections=all_results)
 
 @router.delete("/face", response_model=MessageResponse)
 async def delete_face(name: str):
+    logger.info("Delete face request name=%s", name)
     if not vector_db.is_user_registered(name):
-         raise HTTPException(status_code=404, detail=f"User with name '{name}' not found")
+        logger.warning("Delete rejected: user not found name=%s", name)
+        raise HTTPException(status_code=404, detail=f"User with name '{name}' not found")
 
     vector_db.delete_face_by_metadata(name)
+    logger.info("Face deleted successfully name=%s", name)
     return MessageResponse(message=f"Face(s) for user '{name}' deleted successfully")
 
 @router.get("/admin/stats")

@@ -1,3 +1,4 @@
+import newrelic.agent
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from app.core.config import settings
@@ -383,6 +384,14 @@ class VectorDBService:
             result["full_face_score"] = round(top_full_score, 4)
             result["region_stage_used"] = bool(region_results)
             result["occlusion_stage_used"] = bool(occlusion_results)
+
+        newrelic.agent.record_custom_event("VectorDBSearch", {
+            "matched": len(final_results) > 0,
+            "top_score": round(final_results[0]["score"], 4) if final_results else 0.0,
+            "region_stage_used": bool(region_results),
+            "occlusion_stage_used": bool(occlusion_results),
+            "occlusion_model_used": occlusion_model_used,
+        })
         return final_results
 
     def search_face(
